@@ -52,18 +52,40 @@ func publicKey(path, publicKeyOverride string, publicKeyIdentities []string, ski
 					for _, identityFile := range publicKeyIdentities {
 						// append to identityfiles
 						keybytes, err := os.ReadFile(identityFile)
-						handleError(err)
-						pubkey, _, _, _, err := ssh.ParseAuthorizedKey(keybytes)
-						handleError(err)
+						if err != nil {
+							// if identity file doesn't exist, skip it and use all agent keys
+							if verboseOutput {
+								fmt.Fprintf(os.Stderr, "ssh: identity file %s not found, will use all keys from agent\n", identityFile)
+							}
+							continue
+						}
+						pubkey, _, _, _, parseErr := ssh.ParseAuthorizedKey(keybytes)
+						if parseErr != nil {
+							if verboseOutput {
+								fmt.Fprintf(os.Stderr, "ssh: failed to parse identity file %s, will use all keys from agent\n", identityFile)
+							}
+							continue
+						}
 						identities[identityFile] = pubkey
 					}
 				} else {
 					// append to identityfiles
 					keybytes, err := os.ReadFile(publicKeyOverride)
-					handleError(err)
-					pubkey, _, _, _, err := ssh.ParseAuthorizedKey(keybytes)
-					handleError(err)
-					identities[publicKeyOverride] = pubkey
+					if err != nil {
+						// if override file doesn't exist but agent has keys, use all agent keys
+						if verboseOutput {
+							fmt.Fprintf(os.Stderr, "ssh: identity file %s not found, will use all keys from agent\n", publicKeyOverride)
+						}
+					} else {
+						pubkey, _, _, _, parseErr := ssh.ParseAuthorizedKey(keybytes)
+						if parseErr != nil {
+							if verboseOutput {
+								fmt.Fprintf(os.Stderr, "ssh: failed to parse identity file %s, will use all keys from agent\n", publicKeyOverride)
+							}
+						} else {
+							identities[publicKeyOverride] = pubkey
+						}
+					}
 				}
 				// check all keys in the agent to see if there is a matching identity file
 				for _, signer := range agentSigners {
@@ -94,7 +116,13 @@ func publicKey(path, publicKeyOverride string, publicKeyIdentities []string, ski
 		fmt.Fprintf(os.Stderr, "ssh: attempting connection using private key: %s\n", path)
 	}
 	key, err := os.ReadFile(path)
-	handleError(err)
+	if err != nil {
+		// provide helpful error message when no keys available
+		if os.IsNotExist(err) {
+			handleError(fmt.Errorf("ssh: no keys found in ssh-agent and private key file %s does not exist. Please add keys to your ssh-agent with 'ssh-add', specify a key file path in ~/.lagoon.yml, or use --ssh-key flag", path))
+		}
+		handleError(err)
+	}
 
 	// Try to look for an unencrypted private key
 	signer, err := ssh.ParsePrivateKey(key)
